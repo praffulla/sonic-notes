@@ -1,0 +1,8 @@
+.DS_Store
+*.swp
+*.img
+*.img.gz
+*.bin
+*.pcap
+site/
+__pycache__/
