@@ -8,7 +8,7 @@
 > - **1.1** What "monolithic" and "disaggregated" really mean, where SONiC is better than a vendor NOS, and where it is not
 > - **1.2** Why Microsoft — a cloud operator — built its own switch OS
 > - **1.3** The three design pillars behind SONiC: SAI, containers and Redis
-> - **1.4** How SONiC is installed and how it boots *(to be written)*
+> - **1.4** How SONiC is installed (ONIE) and what happens from power-on to a running switch
 
 ---
 
@@ -488,9 +488,156 @@ their own.
 
 ---
 
-## 🚀 1.4 Install path (ONIE) vs. boot path
+## 🚀 1.4 Install path (ONIE) and boot lifecycle
 
-*To be written.*
+> [!IMPORTANT]
+> **ONIE is not part of the normal boot.** ONIE is used to *install* SONiC — or to reinstall or
+> rescue it. On an everyday power-on, the switch boots straight into SONiC without passing
+> through ONIE. So there are two separate paths:
+
+```
+INSTALL PATH (once, or when reinstalling)
+  Power on → ONIE → finds SONiC installer → writes SONiC to disk → reboot
+
+BOOT PATH (every power-on)
+  BIOS/UEFI → GRUB → Linux kernel → systemd → containers → supervisord → processes
+```
+
+### 1.4.1 The install path: ONIE
+
+**What ONIE is:** ONIE (Open Network Install Environment) is a tiny Linux system that the
+hardware maker pre-installs on every white-box switch, on its own disk partition. It does one
+job: **find a network OS and install it.** It was created by Cumulus Networks and contributed to
+OCP.
+
+**Why it exists:** a server ships with a BIOS that can boot an installer from USB or the network.
+Switches had nothing like that — vendor switches shipped with their OS already installed. ONIE
+gives white boxes the same "bring your own OS" ability. It is what makes the disaggregated model
+in 1.1 work at all.
+
+**How ONIE finds an installer** (details in Chapter 2):
+
+- **Automatic discovery** — ONIE asks DHCP for an installer URL, or tries a list of well-known
+  file names on HTTP/TFTP servers. This is how a fleet of new switches installs itself with zero
+  touch.
+- **Manual** — from the ONIE prompt: `onie-nos-install http://server/sonic-broadcom.bin`.
+- **USB** — a USB stick with the installer file on it.
+
+**What the SONiC installer does:**
+
+1. Creates a SONiC partition on the switch's disk.
+2. Writes the image into its own folder (e.g. `/host/image-<version>/`): the kernel, a compressed
+   read-only root filesystem, and the Docker images for all the containers.
+3. Adds a SONiC entry to the GRUB boot menu, keeping ONIE as another entry.
+4. Reboots.
+
+**Multiple images side by side:** each SONiC version lives in its own folder, so a switch can hold
+the old and the new version together. `sonic-installer` lists them, installs new ones and chooses
+which one boots next. If an upgrade goes wrong, you set the old image as default and reboot.
+
+> [!TIP]
+> **Real-world comparison:** with a vendor NOS, a new switch arrives with the vendor's OS already
+> on it. With white boxes, the switch arrives "empty" except for ONIE, and *your* provisioning
+> system decides which OS it gets. At hyperscale this is a strength: thousands of switches can be
+> installed automatically from your own servers.
+
+### 1.4.2 The boot path: from power-on to a running switch
+
+![SONiC boot path](../../diagrams/ch01/boot-path.svg)
+
+#### Step 1 — BIOS/UEFI → GRUB
+
+The firmware starts the **GRUB** boot loader (ARM switches use **U-Boot** instead). GRUB shows a
+menu: the installed SONiC version(s), and ONIE. By default it picks the SONiC image set by
+`sonic-installer`.
+
+#### Step 2 — Linux kernel and initramfs
+
+GRUB loads the SONiC kernel and a small startup filesystem (initramfs), which prepares the real
+root filesystem:
+
+- the **read-only** compressed system image (squashfs),
+- with a **writable layer** on top (overlayfs), where changes are stored.
+
+This is why a SONiC image behaves like a sealed appliance: the base system stays clean, and an
+upgrade simply boots a different image folder.
+
+#### Step 3 — systemd starts the services in order
+
+The kernel starts **systemd**, Linux's service manager. It starts SONiC's containers as ordinary
+services (`database.service`, `swss.service`, `syncd.service`, `bgp.service`…), **in dependency
+order**:
+
+```
+database          ← Redis must exist first; everything talks through it
+   │
+   ├── config loaded into CONFIG_DB (from /etc/sonic/config_db.json)
+   │
+   ├── swss  ⇄  syncd   ← started and restarted together
+   │
+   ├── bgp, teamd, lldp, …
+   │
+   └── snmp, telemetry, …  ← some are started a little later on purpose
+```
+
+The order follows directly from the three pillars in 1.3:
+
+- **Redis first** — it is the shared state every service needs.
+- **swss and syncd together** — orchagent's view of the ASIC and syncd's real ASIC state must stay
+  consistent. If one restarts, the other restarts too.
+- **Protocols and extras after** — they need ports and interfaces to exist first.
+
+> [!NOTE]
+> systemd starts some services in parallel, so this is a *dependency* order, not a strict
+> one-at-a-time sequence. For example, `lldp` doesn't wait for `bgp`. What matters is that
+> `database` comes first, and `swss`/`syncd` come before the protocol containers.
+
+**First boot is special:** the switch unpacks its container images, and creates an initial
+configuration from platform files (port list, hardware SKU) if no `config_db.json` exists yet.
+That is why the first boot after installation takes noticeably longer.
+
+#### Step 4 — Inside each container, supervisord starts the processes
+
+Each container runs several processes. Inside the container, **supervisord** starts and watches
+them:
+
+| Container | Some processes supervisord runs |
+|---|---|
+| `swss` | `orchagent`, `portsyncd`, `intfmgrd`, `vlanmgrd`, `neighsyncd`… |
+| `bgp` | `zebra`, `bgpd`, `staticd`, `fpmsyncd`, `bgpcfgd` |
+| `syncd` | `syncd` (which loads the vendor SAI library) |
+
+### 1.4.3 Who restarts what when something fails
+
+There are two levels of supervision:
+
+| What fails | Who notices | What happens |
+|---|---|---|
+| A **non-critical** process (e.g. a helper script) | supervisord | It restarts just that process |
+| A **critical** process (e.g. `orchagent`, `bgpd`) | supervisord, using the container's critical-process list | The **whole container** exits on purpose |
+| A container exits | systemd | It restarts the container — and the containers that depend on it |
+
+> [!IMPORTANT]
+> **Why kill the whole container for a critical process?** If `orchagent` dies, restarting only
+> `orchagent` could leave it out of step with what is programmed in the ASIC. Restarting the
+> container (with `syncd`) brings everything back to a known, consistent state. SONiC prefers a
+> clean restart over a fast but risky partial one. Warm reboot (Chapter 17) exists to make such
+> restarts less disruptive.
+
+> [!NOTE]
+> **Connect back to 1.1:** this two-level model is how SONiC gets the crash isolation discussed in
+> 1.1.3 — supervisord gives process-level isolation, and systemd plus container boundaries give
+> service-level isolation.
+
+### 1.4.4 Seeing it on a real switch
+
+| What you want to know | Command |
+|---|---|
+| Which SONiC version is running | `show version` |
+| Which images are installed, and which boots next | `sonic-installer list` |
+| Service status | `systemctl status swss` |
+| Running containers | `docker ps` |
+| Processes inside a container | `docker exec swss supervisorctl status` |
 
 ---
 
@@ -512,3 +659,8 @@ their own.
 8. Why is the `database` container more critical than the `lldp` container?
 9. Redis is both a state store and a notification system. Why would a pure message bus (like
    ZeroMQ alone) not be enough for SONiC?
+10. A switch boots normally every day. Does it run ONIE on each boot? When does ONIE run?
+11. Why must the `database` container start before `swss` and `bgp`?
+12. `bgpd` crashes inside the `bgp` container. What happens next, step by step?
+13. An upgrade to a new SONiC image goes badly. How do you get back to the old version, and why is
+    that possible?
