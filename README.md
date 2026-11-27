@@ -105,7 +105,11 @@ Status: ✅ drafted · 📝 notes only · ⬜ not started
     - 1.3.3 Pillar 2 — Microservices (Docker containers)
     - 1.3.4 Pillar 3 — Shared state (Redis)
     - 1.3.5 How the pillars work together
-  - 1.4 Install path (ONIE) vs. boot path ⬜
+  - 1.4 Install path (ONIE) and boot lifecycle
+    - 1.4.1 The install path: ONIE
+    - 1.4.2 The boot path: from power-on to a running switch
+    - 1.4.3 Who restarts what when something fails
+    - 1.4.4 Seeing it on a real switch
 - ⬜ Chapter 2 — Installing SONiC & the SONiC-VPP lab
 - ⬜ Chapter 3 — Container & subsystem topology
 - ⬜ Chapter 4 — The SONiC build system
