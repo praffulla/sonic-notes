@@ -99,7 +99,12 @@ Status: ✅ drafted · 📝 notes only · ⬜ not started
     - 1.1.5 When a monolithic NOS is better than SONiC
     - 1.1.6 Summary: when to choose which
   - 1.2 Why Microsoft built SONiC
-  - 1.3 The three pillars: SAI, containers, Redis ⬜
+  - 1.3 The three pillars: SAI, containers, Redis
+    - 1.3.1 The problems on the table
+    - 1.3.2 Pillar 1 — Hardware abstraction (SAI)
+    - 1.3.3 Pillar 2 — Microservices (Docker containers)
+    - 1.3.4 Pillar 3 — Shared state (Redis)
+    - 1.3.5 How the pillars work together
   - 1.4 Install path (ONIE) vs. boot path ⬜
 - ⬜ Chapter 2 — Installing SONiC & the SONiC-VPP lab
 - ⬜ Chapter 3 — Container & subsystem topology
@@ -134,3 +139,8 @@ Status: ✅ drafted · 📝 notes only · ⬜ not started
 - ⬜ Chapter 17 — Fast & warm reboot
 - ⬜ Chapter 18 — Platform subsystem (pmon)
 - ⬜ Chapter 19 — Debugging & diagnostics playbook
+
+### Appendices
+
+- ✅ [Appendix A — Design questions to explore](book/appendix/a-design-questions.md)
+  - A.1 Why did SONiC choose Redis?
