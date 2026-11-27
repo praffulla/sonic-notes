@@ -2,7 +2,17 @@
 
 > Part I — Installation, System Topology & Build · [Back to index](../../README.md)
 
-## 1.1 Monolithic NOS vs. disaggregated white box
+> [!NOTE]
+> **In this chapter**
+>
+> - **1.1** What "monolithic" and "disaggregated" really mean, where SONiC is better than a vendor NOS, and where it is not
+> - **1.2** Why Microsoft — a cloud operator — built its own switch OS
+> - **1.3** The three design pillars behind SONiC: SAI, containers and Redis
+> - **1.4** How SONiC is installed and how it boots *(to be written)*
+
+---
+
+## ⚖️ 1.1 Monolithic NOS vs. disaggregated white box
 
 ### 1.1.1 The two parts of a switch
 
@@ -70,9 +80,10 @@ in the second sense. In EOS:
 SONiC's design is very similar: each feature is a separate process (in a container), and
 **Redis** plays the role of Sysdb.
 
-**So the honest comparison is:** EOS and SONiC have about the same crash isolation, because both
-use separate processes and a shared state database. EOS is still monolithic in the *first*
-sense — it runs only on Arista hardware, and only Arista can change its code.
+> [!IMPORTANT]
+> **So the honest comparison is:** EOS and SONiC have about the same crash isolation, because both
+> use separate processes and a shared state database. EOS is still monolithic in the *first*
+> sense — it runs only on Arista hardware, and only Arista can change its code.
 
 ### 1.1.4 Where SONiC is better than a process-based NOS like EOS
 
@@ -92,8 +103,9 @@ EOS runs only on Arista switches. SONiC runs on any switch whose chip vendor pro
   both. Even moving to a different chip vendor mostly means swapping the `syncd` container and
   its SAI library.
 
-**The catch:** each new hardware model still needs testing — optics, platform drivers, buffer
-tuning. Much easier than changing NOS vendors, but not zero work.
+> [!WARNING]
+> **The catch:** each new hardware model still needs testing — optics, platform drivers, buffer
+> tuning. Much easier than changing NOS vendors, but not zero work.
 
 #### 2. Open source — you control how fast fixes arrive
 
@@ -115,11 +127,13 @@ and BGP sessions flap on 300 switches.
    your SONiC vendor.
 3. Rebuild only the SNMP container, test that one change, and roll it out.
 
-**What this shows:** SONiC doesn't have fewer bugs — every NOS has bugs. With SONiC, *you*
-decide how long a fix takes and how much you have to change to apply it.
+> [!TIP]
+> **What this shows:** SONiC doesn't have fewer bugs — every NOS has bugs. With SONiC, *you*
+> decide how long a fix takes and how much you have to change to apply it.
 
-**The catch:** this works only if you have engineers who can read code, build images and own
-the result.
+> [!WARNING]
+> **The catch:** this works only if you have engineers who can read code, build images and own
+> the result.
 
 #### 3. Containers — packaging and ownership, not just isolation
 
@@ -134,19 +148,21 @@ which gives SONiC benefits processes alone don't:
 | Run multiple copies | Multi-ASIC switches run one set of containers per chip (`swss0`/`syncd0`, `swss1`/`syncd1`…) |
 | Standard tooling | Docker images, registries, `docker logs`, server CI/CD pipelines work as-is |
 
-**The catch:** many SONiC containers run with full privileges and the host's network, because
-they need direct hardware access. Their *security* isolation is weak — the boundaries are mostly
-organizational.
+> [!WARNING]
+> **The catch:** many SONiC containers run with full privileges and the host's network, because
+> they need direct hardware access. Their *security* isolation is weak — the boundaries are mostly
+> organizational.
 
 #### 4. Same data model on every switch, from every vendor
 
 **Example — monitoring.** You want queue and buffer statistics from every port every few
 seconds, plus your own health-check program on every switch.
 
-**First, what no NOS can change:** hardware counters are limited by the chip. If the ASIC
-doesn't count something, no software can report it. If the ASIC counts it but the chip vendor's
-SAI doesn't expose it, you have to ask the chip vendor — whether you run SONiC, EOS or anything
-else.
+> [!IMPORTANT]
+> **First, what no NOS can change:** hardware counters are limited by the chip. If the ASIC
+> doesn't count something, no software can report it. If the ASIC counts it but the chip vendor's
+> SAI doesn't expose it, you have to ask the chip vendor — whether you run SONiC, EOS or anything
+> else.
 
 | Layer | Owned by | Decides |
 |---|---|---|
@@ -171,9 +187,10 @@ scripts.
 - For deep debugging, the chip vendor's debug shell is usually available inside the `syncd`
   container (for example `bcmcmd` on Broadcom chips).
 
-**What this shows:** SONiC doesn't remove your dependence on the chip vendor for *hardware
-data*. It removes your dependence on a *NOS vendor* for everything above it — how data is
-collected, stored, combined and exported.
+> [!TIP]
+> **What this shows:** SONiC doesn't remove your dependence on the chip vendor for *hardware
+> data*. It removes your dependence on a *NOS vendor* for everything above it — how data is
+> collected, stored, combined and exported.
 
 ### 1.1.5 When a monolithic NOS is better than SONiC
 
@@ -189,8 +206,9 @@ Disaggregation is not always the right answer. A vendor NOS is often better in t
   SONiC itself? Each party can point at another. Your team has to narrow it down before anyone
   takes ownership.
 
-This is the biggest hidden cost of disaggregation, and why brite boxes and commercial SONiC
-exist: they sell back a single point of accountability.
+> [!IMPORTANT]
+> This is the biggest hidden cost of disaggregation, and why brite boxes and commercial SONiC
+> exist: they sell back a single point of accountability.
 
 #### 2. You need features SONiC isn't built for
 
@@ -242,7 +260,9 @@ on having people with Linux and software skills.
 **Or choose the middle** — brite box or commercial SONiC — if you want SONiC's openness but
 still need a single company to call.
 
-## 1.2 Why Microsoft built SONiC
+---
+
+## 🏢 1.2 Why Microsoft built SONiC
 
 By the mid-2010s Microsoft was not "a server company" but the operator of Azure — one of the
 largest networks in the world. Off-the-shelf switches had become a bottleneck:
@@ -273,11 +293,14 @@ Microsoft was not alone — Google had built its own switches and software, and 
 Wedge hardware and FBOSS. SONiC became the most widely adopted because it was open and
 organized around the SAI standard.
 
-## 1.3 The three pillars: SAI, containers, Redis
+---
+
+## 🧱 1.3 The three pillars: SAI, containers, Redis
 
 The easiest way to understand SONiC's design is to look at the **problems its founders faced in
 2015** and see how each pillar solves one of them.
 
+> [!NOTE]
 > **Note:** this is the design reasoning reconstructed from how SONiC is built and from its
 > public design material — not quotes from the founders.
 
@@ -334,15 +357,16 @@ only a few operations.
   Changing chip vendor mostly means a different `syncd` image.
 - orchagent never touches the chip directly — it asks `syncd` through SAI.
 
-**The trade-offs:**
-
-- **Lowest common denominator.** The standard covers what most chips have in common. Features
-  unique to one chip need vendor SAI extensions, which are not portable.
-- **Same API, different behavior.** Vendors sometimes interpret the specification slightly
-  differently — defaults, limits, error codes. This is why SAI has its own test suites, and why
-  every new platform still needs testing.
-- **Dependence on the vendor's SAI quality.** If the vendor's SAI has a bug or lacks a feature,
-  SONiC cannot work around it (see the counter example in 1.1.4).
+> [!WARNING]
+> **The trade-offs:**
+>
+> - **Lowest common denominator.** The standard covers what most chips have in common. Features
+>   unique to one chip need vendor SAI extensions, which are not portable.
+> - **Same API, different behavior.** Vendors sometimes interpret the specification slightly
+>   differently — defaults, limits, error codes. This is why SAI has its own test suites, and why
+>   every new platform still needs testing.
+> - **Dependence on the vendor's SAI quality.** If the vendor's SAI has a bug or lacks a feature,
+>   SONiC cannot work around it (see the counter example in 1.1.4).
 
 ### 1.3.3 Pillar 2 — Microservices (Docker containers)
 
@@ -373,12 +397,13 @@ Inside each container, **supervisord** starts and watches its processes. On the 
 - The chip vendor's binary code stays inside `syncd`.
 - Operators can add their own service as one more container.
 
-**The trade-offs** (see also 1.1.4):
-
-- **Weak security isolation** — many containers need full privileges to reach hardware.
-- **Restarts can cascade** — some services depend on others; restarting `swss` also restarts
-  `syncd`.
-- **More memory and disk** than one tightly packed image.
+> [!WARNING]
+> **The trade-offs** (see also 1.1.4):
+>
+> - **Weak security isolation** — many containers need full privileges to reach hardware.
+> - **Restarts can cascade** — some services depend on others; restarting `swss` also restarts
+>   `syncd`.
+> - **More memory and disk** than one tightly packed image.
 
 ### 1.3.4 Pillar 3 — Shared state (Redis)
 
@@ -425,17 +450,19 @@ agree on the format of `ROUTE_TABLE`.
   retry if something it depends on isn't ready yet.
 - **Any language** — C++ daemons and Python scripts use the same tables.
 
-**The trade-offs:**
+> [!WARNING]
+> **The trade-offs:**
+>
+> - **The table format is the contract.** Change a table's fields and every service that reads it
+>   can break.
+> - **Everything is asynchronous.** A route can arrive before the neighbor it points to, so
+>   consumers must handle out-of-order data. This is why orchagent keeps a retry queue
+>   (Chapter 10).
+> - **Redis is a shared dependency.** If the `database` container restarts, effectively everything
+>   restarts with it.
+> - **No transactions across tables.** For a short time, different tables can be out of step.
 
-- **The table format is the contract.** Change a table's fields and every service that reads it
-  can break.
-- **Everything is asynchronous.** A route can arrive before the neighbor it points to, so
-  consumers must handle out-of-order data. This is why orchagent keeps a retry queue
-  (Chapter 10).
-- **Redis is a shared dependency.** If the `database` container restarts, effectively everything
-  restarts with it.
-- **No transactions across tables.** For a short time, different tables can be out of step.
-
+> [!TIP]
 > **Explore on your own:** why did the founders pick Redis rather than other options, and
 > where has it turned out to be a limit? See
 > [Appendix A.1 — Why did SONiC choose Redis?](../appendix/a-design-questions.md#a1-why-did-sonic-choose-redis)
@@ -448,9 +475,10 @@ Each pillar solves one problem, and each relies on the others:
 - **Redis** lets those services cooperate without knowing about each other.
 - **SAI** lets the one service that touches hardware (`syncd`) work with any chip.
 
-Together they create SONiC's central pattern: **every change flows as state through Redis, from
-service to service, until `syncd` turns it into SAI calls on the chip.** Almost every later
-chapter follows one piece of this pattern.
+> [!IMPORTANT]
+> Together they create SONiC's central pattern: **every change flows as state through Redis, from
+> service to service, until `syncd` turns it into SAI calls on the chip.** Almost every later
+> chapter follows one piece of this pattern.
 
 **Compared with EOS:** Arista also uses a central state database (Sysdb), so the idea behind
 pillar 3 is not unique to SONiC. What is different is the combination: SONiC's database is open
@@ -458,11 +486,15 @@ for anyone to read and extend, it is paired with a standard hardware API (SAI) i
 vendor's chip code, and the services are packaged so that many different owners can each ship
 their own.
 
-## 1.4 Install path (ONIE) vs. boot path
+---
+
+## 🚀 1.4 Install path (ONIE) vs. boot path
 
 *To be written.*
 
-## Check yourself
+---
+
+## 📝 Check yourself
 
 1. EOS and SONiC both restart a crashed process without stopping forwarding. So what is the main
    reason a hyperscaler would choose SONiC over EOS?
