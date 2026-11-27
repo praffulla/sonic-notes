@@ -275,7 +275,188 @@ organized around the SAI standard.
 
 ## 1.3 The three pillars: SAI, containers, Redis
 
-*To be written.*
+The easiest way to understand SONiC's design is to look at the **problems its founders faced in
+2015** and see how each pillar solves one of them.
+
+> **Note:** this is the design reasoning reconstructed from how SONiC is built and from its
+> public design material — not quotes from the founders.
+
+### 1.3.1 The problems on the table
+
+The Azure networking team wanted their own switch OS, with four constraints:
+
+1. **It must run on switches with different chips** (Broadcom, Mellanox, others), without
+   writing a new NOS for each one.
+2. **Code would come from many owners** — open-source routing (Quagga at first, later FRR), chip
+   vendors' drivers, and Microsoft's own code.
+3. **Each piece must be fixable and upgradable on its own**, quickly, across thousands of
+   switches.
+4. **The switch must be easy to operate and debug** with server-style tools, and survive
+   individual components crashing.
+
+Each pillar answers one question:
+
+| Pillar | Question it answers |
+|---|---|
+| SAI — hardware abstraction | How do we run on any chip? |
+| Docker — microservices | How do we package and upgrade code from many owners independently? |
+| Redis — shared state | How do all the pieces talk without depending on each other? |
+
+### 1.3.2 Pillar 1 — Hardware abstraction (SAI)
+
+**The problem:** every switching chip comes with its vendor's own SDK — a proprietary library
+with its own functions and concepts. Programming a route on Broadcom is different from
+programming a route on Mellanox. A NOS written for one SDK has to be rewritten for another,
+which is one reason vendor NOSes are tied to their hardware.
+
+**The idea:** define **one standard C API** for programming any switch chip, and have each chip
+vendor implement it. That API is **SAI (Switch Abstraction Interface)**. Microsoft proposed it at
+OCP in 2015, together with Dell, Facebook, Broadcom, Intel and Mellanox.
+
+*Analogy:* a printer driver. Word doesn't know how each printer works — it calls a standard
+print interface, and each printer maker supplies a driver behind it.
+
+**How SAI describes a chip:** everything is an **object** with **attributes**, and there are
+only a few operations.
+
+- Objects: port, VLAN, router interface, next hop, route, ACL…
+- Operations: `create`, `remove`, `set`, `get`
+- Each object gets an **object ID**; objects refer to each other by ID — for example, a route
+  points to a next-hop ID.
+
+"Add a route" is the same SAI call on every chip. Only the vendor's library underneath
+(`libsai.so`) is different.
+
+**What this means for SONiC's design:**
+
+- Everything above SAI is chip-independent.
+- Only one container, **`syncd`**, loads the vendor's SAI library and talks to the chip.
+  Changing chip vendor mostly means a different `syncd` image.
+- orchagent never touches the chip directly — it asks `syncd` through SAI.
+
+**The trade-offs:**
+
+- **Lowest common denominator.** The standard covers what most chips have in common. Features
+  unique to one chip need vendor SAI extensions, which are not portable.
+- **Same API, different behavior.** Vendors sometimes interpret the specification slightly
+  differently — defaults, limits, error codes. This is why SAI has its own test suites, and why
+  every new platform still needs testing.
+- **Dependence on the vendor's SAI quality.** If the vendor's SAI has a bug or lacks a feature,
+  SONiC cannot work around it (see the counter example in 1.1.4).
+
+### 1.3.3 Pillar 2 — Microservices (Docker containers)
+
+**The problem:** SONiC combines code from many sources with different release cycles — FRR from
+its open-source community, `syncd` with the chip vendor's binary library, LLDP and LACP daemons
+from other projects, and Microsoft's own orchestration code. Building all of it into one tightly
+coupled image would mean every fix requires rebuilding and retesting everything.
+
+**The idea:** split the switch into small services — **one main function per container** — each
+packaged with its own dependencies.
+
+| Container | Main job |
+|---|---|
+| `database` | Runs Redis, the shared state store |
+| `bgp` | FRR routing protocols |
+| `swss` | Switch State Service — orchagent and helper daemons that turn state into SAI calls |
+| `syncd` | Talks to the chip through the vendor's SAI library |
+| `teamd` | Link aggregation (LACP) |
+| `lldp`, `snmp`, `pmon`, `telemetry`… | Neighbor discovery, SNMP, platform monitoring, streaming telemetry |
+
+Inside each container, **supervisord** starts and watches its processes. On the host,
+**systemd** starts the containers in the right order.
+
+**What this means for SONiC's design:**
+
+- A fix to BGP means a new `bgp` container, not a new OS.
+- A crash in one service is contained and restarted (process isolation — see 1.1.3).
+- The chip vendor's binary code stays inside `syncd`.
+- Operators can add their own service as one more container.
+
+**The trade-offs** (see also 1.1.4):
+
+- **Weak security isolation** — many containers need full privileges to reach hardware.
+- **Restarts can cascade** — some services depend on others; restarting `swss` also restarts
+  `syncd`.
+- **More memory and disk** than one tightly packed image.
+
+### 1.3.4 Pillar 3 — Shared state (Redis)
+
+**The problem:** with many separate services, how do they communicate? The obvious answer —
+each service calls the others directly — has serious problems:
+
+- every service must know about every other one, so connections multiply as services are added;
+- if a service is down or restarting, calls to it fail;
+- when a service restarts, it has lost its state and must ask everyone again;
+- there is no single place to see what the switch "thinks" is going on.
+
+**The idea:** services don't talk to each other. They **read and write a central in-memory
+database — Redis** — which is the switch's **single source of truth**.
+
+- A **producer** writes what it knows, or wants, into a table.
+- **Consumers** subscribe to the tables they care about and are notified when they change.
+- Nobody needs to know who is on the other side.
+
+**Example — the path of a BGP route:**
+
+```
+bgp container (FRR) ──► fpmsyncd ──► APPL_DB: ROUTE_TABLE
+                                          │
+                                          ▼
+                  swss container: orchagent (RouteOrch)
+                                          │
+                                          ▼
+                     ASIC_DB (via sairedis) ──► syncd ──► SAI ──► ASIC
+```
+
+FRR doesn't know orchagent exists. orchagent doesn't know where the route came from. They only
+agree on the format of `ROUTE_TABLE`.
+
+**What this gives SONiC:**
+
+- **Loose coupling** — services can be replaced or added without changing the others, as long as
+  they use the same tables.
+- **Restart recovery** — a restarted service reads the current state back from Redis and carries
+  on.
+- **Visibility** — the whole switch state can be inspected with `redis-cli`. This is one of
+  SONiC's biggest debugging strengths.
+- **Desired state, not commands** — services publish *what should be true* ("this route should
+  exist"), not step-by-step instructions. The consumer works out how to make it true, and can
+  retry if something it depends on isn't ready yet.
+- **Any language** — C++ daemons and Python scripts use the same tables.
+
+**The trade-offs:**
+
+- **The table format is the contract.** Change a table's fields and every service that reads it
+  can break.
+- **Everything is asynchronous.** A route can arrive before the neighbor it points to, so
+  consumers must handle out-of-order data. This is why orchagent keeps a retry queue
+  (Chapter 10).
+- **Redis is a shared dependency.** If the `database` container restarts, effectively everything
+  restarts with it.
+- **No transactions across tables.** For a short time, different tables can be out of step.
+
+> **Explore on your own:** why did the founders pick Redis rather than other options, and
+> where has it turned out to be a limit? See
+> [Appendix A.1 — Why did SONiC choose Redis?](../appendix/a-design-questions.md#a1-why-did-sonic-choose-redis)
+
+### 1.3.5 How the pillars work together
+
+Each pillar solves one problem, and each relies on the others:
+
+- **Docker** splits SONiC into independent services.
+- **Redis** lets those services cooperate without knowing about each other.
+- **SAI** lets the one service that touches hardware (`syncd`) work with any chip.
+
+Together they create SONiC's central pattern: **every change flows as state through Redis, from
+service to service, until `syncd` turns it into SAI calls on the chip.** Almost every later
+chapter follows one piece of this pattern.
+
+**Compared with EOS:** Arista also uses a central state database (Sysdb), so the idea behind
+pillar 3 is not unique to SONiC. What is different is the combination: SONiC's database is open
+for anyone to read and extend, it is paired with a standard hardware API (SAI) instead of one
+vendor's chip code, and the services are packaged so that many different owners can each ship
+their own.
 
 ## 1.4 Install path (ONIE) vs. boot path
 
@@ -290,3 +471,12 @@ organized around the SAI standard.
 3. A company has three network engineers, no software developers and 40 switches across two
    sites. Which row of the spectrum table fits them, and why?
 4. Why do brite-box and commercial SONiC products exist, if community SONiC is free?
+5. Which pillar lets SONiC move from a Broadcom switch to an NVIDIA switch, and which single
+   container changes?
+6. BGP learns a route before ARP has resolved the next hop's MAC address. Which pillar's
+   trade-off creates this problem, and how does SONiC deal with it?
+7. Why would direct calls between services, instead of Redis, make restarting the `bgp`
+   container harder?
+8. Why is the `database` container more critical than the `lldp` container?
+9. Redis is both a state store and a notification system. Why would a pure message bus (like
+   ZeroMQ alone) not be enough for SONiC?
